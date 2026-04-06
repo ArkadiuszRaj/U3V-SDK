@@ -5,22 +5,22 @@ C++ SDK for USB3 Vision cameras on Linux. Provides a simple API for camera disco
 ## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│            User Application             │
-├─────────────────────────────────────────┤
-│  U3VCamera   (include/u3v_camera.hpp)   │
-│  - find camera by serial/model/index    │
-│  - read/write GenICam registers         │
-│  - start/stop streaming, get frames     │
-├─────────────────────────────────────────┤
+┌──────────────────────────────────────────┐
+│            User Application              │
+├──────────────────────────────────────────┤
+│  U3VCamera   (include/u3v_camera.hpp)    │
+│  - find camera by serial/model/index     │
+│  - read/write GenICam registers          │
+│  - start/stop streaming, get frames      │
+├──────────────────────────────────────────┤
 │  GenICam XML Parser  (include/xml_parser)│
-│  - NodeMap, NodeInfo, MathCalc          │
-│  - parses device feature descriptors    │
-├─────────────────────────────────────────┤
-│  usb3vision kernel driver  (/dev/u3vX)  │
-│  - USB bulk transfers, buffer mgmt      │
-│  - ioctl interface (read/write/stream)  │
-└─────────────────────────────────────────┘
+│  - NodeMap, NodeInfo, MathCalc           │
+│  - parses device feature descriptors     │
+├──────────────────────────────────────────┤
+│  usb3vision kernel driver  (/dev/u3vX)   │
+│  - USB bulk transfers, buffer mgmt       │
+│  - ioctl interface (read/write/stream)   │
+└──────────────────────────────────────────┘
 ```
 
 ## Components
