@@ -226,7 +226,7 @@ When the queue is full, the oldest frame is dropped (newest-wins policy).
 
 ## Examples
 
-### Konfiguracja ekspozycji i rozdzielczosci
+### Exposure and Resolution Configuration
 
 ```cpp
 #include "u3v_camera.hpp"
@@ -236,16 +236,16 @@ int main() {
     cam.open();
     cam.load_xml();
 
-    // Sprawdz dostepne tryby ekspozycji
+    // Check available exposure-related features
     for (const auto& name : cam.find_features("exposure"))
         printf("  %s\n", name.c_str());
 
-    // Ustaw tryb manualny jesli jest enumem
+    // Set manual mode if the feature is an enumeration
     try {
         cam.set_enum_feature("ExposureAuto", "Off");
     } catch (...) {}
 
-    // Sprawdz limity ekspozycji
+    // Check exposure limits
     auto info = cam.describe_feature("ExposureTime");
     printf("ExposureTime: min=%ld, max=%ld, inc=%ld, unit=%s\n",
            info.min ? static_cast<long>(*info.min) : 0,
@@ -253,10 +253,10 @@ int main() {
            info.inc ? static_cast<long>(*info.inc) : 0,
            info.unit.value_or("?").c_str());
 
-    // Ustaw 10ms ekspozycji
+    // Set 10 ms exposure
     cam.set_feature("ExposureTime", 10000);
 
-    // Ustaw ROI (Region of Interest)
+    // Set ROI (Region of Interest)
     cam.set_feature("Width", 1280);
     cam.set_feature("Height", 720);
     cam.set_feature("OffsetX", 0);
@@ -271,7 +271,7 @@ int main() {
 }
 ```
 
-### Synchroniczne przechwytywanie ramek
+### Synchronous Frame Capture
 
 ```cpp
 #include "u3v_camera.hpp"
@@ -287,7 +287,7 @@ int main() {
     cam.start_streaming(static_cast<uint64_t>(w * h), 4);
     cam.execute_command("AcquisitionStart");
 
-    // get_frame() blokuje az do otrzymania ramki (lub timeout)
+    // get_frame() blocks until a frame arrives (or timeout)
     for (int i = 0; i < 100; i++) {
         auto frame = cam.get_frame(std::chrono::milliseconds(2000));
         if (frame) {
@@ -296,22 +296,22 @@ int main() {
                    static_cast<unsigned long>(frame->block_id),
                    frame->status);
 
-            // frame->image_data zawiera surowe piksele
-            // np. zapisz do pliku:
+            // frame->image_data contains raw pixels
+            // e.g. save to a file:
             // fwrite(frame->image_data.data(), 1, frame->image_data.size(), f);
         }
     }
 
     cam.execute_command("AcquisitionStop");
-    cam.stop_streaming();  // zwalnia bufory i zamyka kanal USB
+    cam.stop_streaming();  // releases buffers and closes the USB channel
     return 0;
 }
 ```
 
-### Asynchroniczny grabber z ring bufferem
+### Asynchronous Grabber with Ring Buffer
 
-Gdy przetwarzanie ramek trwa dluzej niz okres miedzy ramkami,
-watek w tle zapewnia ze zawsze mamy najswiezsza ramke:
+When frame processing takes longer than the frame interval,
+a background thread ensures you always get the latest frame:
 
 ```cpp
 #include "u3v_camera.hpp"
@@ -321,7 +321,7 @@ watek w tle zapewnia ze zawsze mamy najswiezsza ramke:
 std::atomic<bool> running{true};
 
 void process_frame(const u3v::Frame& frame) {
-    // Czasochlonne przetwarzanie obrazu...
+    // Time-consuming image processing...
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     printf("Processed block_id=%lu (%zu bytes)\n",
            static_cast<unsigned long>(frame.block_id),
@@ -339,22 +339,22 @@ int main() {
     cam.start_streaming(static_cast<uint64_t>(w * h), 4);
     cam.execute_command("AcquisitionStart");
 
-    // Watek w tle przechwytuje ramki do ring buffera (max 5)
+    // Background thread captures frames into a ring buffer (max 5)
     cam.start_grabber(5);
 
     while (running) {
-        // wait_frame() blokuje do pojawienia sie ramki
+        // wait_frame() blocks until a frame becomes available
         auto frame = cam.wait_frame(std::chrono::milliseconds(1000));
         if (frame)
             process_frame(*frame);
 
-        // Albo non-blocking: pop_frame() zwraca najnowsza lub nullopt
+        // Or non-blocking: pop_frame() returns the latest frame or nullopt
         // auto frame = cam.pop_frame();
     }
 
     cam.stop_grabber();
 
-    // Statystyki: ile ramek przechwycono, ile porzucono (bo kolejka pelna)
+    // Stats: how many frames were captured and dropped (queue full)
     printf("Stats: grabbed=%lu, dropped=%lu\n",
            static_cast<unsigned long>(cam.frames_grabbed()),
            static_cast<unsigned long>(cam.frames_dropped()));
@@ -365,7 +365,7 @@ int main() {
 }
 ```
 
-### Przeglad wszystkich cech kamery (feature dump)
+### List All Camera Features (Feature Dump)
 
 ```cpp
 #include "u3v_camera.hpp"
@@ -424,7 +424,7 @@ int main() {
 }
 ```
 
-### Surowy dostep do rejestrow (bez XML)
+### Raw Register Access (Without XML)
 
 ```cpp
 #include "u3v_camera.hpp"
@@ -433,21 +433,21 @@ int main() {
     u3v::Camera cam;
     cam.open();
 
-    // Odczyt ABRM string rejestrow
+    // Read ABRM string registers
     printf("Manufacturer: %s\n", cam.manufacturer_name().c_str());
     printf("Model:        %s\n", cam.model_name().c_str());
     printf("Serial:       %s\n", cam.serial_number().c_str());
     printf("GenCP:        0x%08X\n", cam.gencp_version());
 
-    // Odczyt/zapis typowany
+    // Typed read/write
     uint64_t sbrm = cam.read_reg<uint64_t>(0x001D8);  // SBRM address
     printf("SBRM address: 0x%08lX\n", static_cast<unsigned long>(sbrm));
 
-    // Odczyt surowy (dowolny rozmiar)
+    // Raw read (arbitrary size)
     uint8_t buf[256];
     cam.read_reg(0x00000, buf, sizeof(buf));
 
-    // Zapis surowy
+    // Raw write
     uint32_t val = 42;
     cam.write_reg(0x12340, &val, sizeof(val));
 
