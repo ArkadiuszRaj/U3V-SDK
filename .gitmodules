@@ -1,0 +1,6 @@
+[submodule "import/pugixml"]
+	path = import/pugixml
+	url = https://github.com/zeux/pugixml.git
+[submodule "import/usb3vision"]
+	path = import/usb3vision
+	url = git@github.com:ArkadiuszRaj/usb3vision.git
