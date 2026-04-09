@@ -29,6 +29,17 @@ struct u3v_read_memory {
     __u32* u_bytes_read;
 };
 
+static uint64_t read_le_u64(const uint8_t* p) {
+    return static_cast<uint64_t>(p[0])
+         | (static_cast<uint64_t>(p[1]) << 8)
+         | (static_cast<uint64_t>(p[2]) << 16)
+         | (static_cast<uint64_t>(p[3]) << 24)
+         | (static_cast<uint64_t>(p[4]) << 32)
+         | (static_cast<uint64_t>(p[5]) << 40)
+         | (static_cast<uint64_t>(p[6]) << 48)
+         | (static_cast<uint64_t>(p[7]) << 56);
+}
+
 static bool readmem(int fd, uint64_t addr, void* buf, uint32_t size) {
     __u32 bytes_read = 0;
     struct u3v_read_memory rd = {
@@ -86,9 +97,9 @@ int main(int argc, char* argv[]) {
         return 3;
     }
 
-    uint64_t file_info    = *(uint64_t*)(entry_buf + 0x00);
-    uint64_t file_offset  = *(uint64_t*)(entry_buf + 0x08);
-    uint64_t file_size_64 = *(uint64_t*)(entry_buf + 0x10);
+    uint64_t file_info    = read_le_u64(entry_buf + 0x00);
+    uint64_t file_offset  = read_le_u64(entry_buf + 0x08);
+    uint64_t file_size_64 = read_le_u64(entry_buf + 0x10);
     uint32_t file_size    = static_cast<uint32_t>(file_size_64);
 
     uint8_t file_type    = (file_info >> 40) & 0xFF;
