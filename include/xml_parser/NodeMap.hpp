@@ -3,6 +3,7 @@
 #include <iostream>
 #include <unordered_map>
 #include <functional>
+#include <limits>
 #include <vector>
 #include <string>
 #include <string_view>
@@ -17,6 +18,16 @@ class NodeMap {
     std::vector<MathEvaluate::Token> expressions_;
     std::vector<NodeInfo> nodeTable_;
     bool error_ = false;
+
+    std::optional<uint16_t> nextNodeId() {
+        if (nodeTable_.size() > static_cast<std::size_t>(std::numeric_limits<uint16_t>::max())) {
+            std::cerr << "Error: Node table exceeded uint16_t capacity (" 
+                      << std::numeric_limits<uint16_t>::max() << ")\n";
+            error_ = true;
+            return std::nullopt;
+        }
+        return static_cast<uint16_t>(nodeTable_.size());
+    }
 
     std::pair<uint32_t, uint32_t> parseExpression(const std::string& expression) {
         MathEvaluate::Parser<double> parser;
@@ -60,7 +71,9 @@ class NodeMap {
 
         for (const auto& [tag, kind] : kKnownTags) {
             if (auto xml = root.find_child_by_attribute(tag, "Name", name.c_str())) {
-                uint16_t id = static_cast<uint16_t>(nodeTable_.size());
+                auto idOpt = nextNodeId();
+                if (!idOpt) return;
+                uint16_t id = *idOpt;
                 nameToId_[name] = id;
 
                 NodeInfo node;
@@ -108,7 +121,9 @@ class NodeMap {
                     }
 
                     if (!nameToId_.contains(structName)) {
-                        uint16_t sid = static_cast<uint16_t>(nodeTable_.size());
+                        auto sidOpt = nextNodeId();
+                        if (!sidOpt) return;
+                        uint16_t sid = *sidOpt;
                         NodeInfo snode;
                         snode.id = sid;
                         snode.kind = NodeKind::StructReg;
@@ -118,7 +133,9 @@ class NodeMap {
                     }
 
                     uint16_t structId = nameToId_[structName];
-                    uint16_t id = static_cast<uint16_t>(nodeTable_.size());
+                    auto idOpt = nextNodeId();
+                    if (!idOpt) return;
+                    uint16_t id = *idOpt;
                     nameToId_[name] = id;
 
                     BitField bf;

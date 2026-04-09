@@ -30,6 +30,7 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <linux/types.h>
+#include <poll.h>
 
 #include <zip.h>
 
@@ -246,6 +247,9 @@ public:
 
     /// Open camera matching a serial number
     void open_by_serial(const std::string& serial) {
+        if (fd_ >= 0)
+            throw std::runtime_error("Camera already open");
+
         for (const auto& dev : enumerate()) {
             int tmp_fd = ::open(dev.c_str(), O_RDWR);
             if (tmp_fd < 0) continue;
@@ -266,6 +270,9 @@ public:
 
     /// Open camera matching a model name
     void open_by_model(const std::string& model) {
+        if (fd_ >= 0)
+            throw std::runtime_error("Camera already open");
+
         for (const auto& dev : enumerate()) {
             int tmp_fd = ::open(dev.c_str(), O_RDWR);
             if (tmp_fd < 0) continue;
@@ -611,6 +618,8 @@ public:
     std::optional<Frame> get_frame(std::chrono::milliseconds timeout = std::chrono::milliseconds(1000)) {
         if (!streaming_)
             throw std::runtime_error("Not streaming");
+        if (timeout.count() < 0)
+            throw std::invalid_argument("timeout must be >= 0");
 
         auto& buf = buffers_[next_buf_idx_];
         if (!buf.queued)
@@ -631,9 +640,20 @@ public:
             .u_buffer_complete_data = nullptr,
         };
 
-        // The kernel driver uses the device timeout; we rely on that.
-        // A future version could use poll/select with the fd.
-        (void)timeout;
+        if (timeout.count() == 0)
+            return std::nullopt;
+
+        struct pollfd pfd = {
+            .fd = fd_,
+            .events = POLLIN,
+            .revents = 0
+        };
+        int poll_ret = ::poll(&pfd, 1, static_cast<int>(timeout.count()));
+        if (poll_ret == 0)
+            return std::nullopt;
+        if (poll_ret < 0)
+            throw std::runtime_error("poll() failed before WAIT_FOR_BUFFER: "
+                + std::string(std::strerror(errno)));
 
         int ret = ioctl(fd_, U3V_IOCTL_WAIT_FOR_BUFFER, &wb);
         buf.queued = false;
@@ -707,6 +727,8 @@ public:
         if (!grabber_running_.load())
             return;
         grabber_running_.store(false);
+        if (streaming_)
+            ioctl(fd_, U3V_IOCTL_CANCEL_ALL_BUFS);
         if (grabber_thread_.joinable())
             grabber_thread_.join();
     }
@@ -890,7 +912,7 @@ private:
         if (r.bitfield) {
             uint8_t lsb = r.bitfield->lsb;
             uint8_t msb = r.bitfield->msb;
-            uint64_t mask = ((1ULL << (msb - lsb + 1)) - 1) << lsb;
+            uint64_t mask = make_bit_mask(lsb, msb);
             raw = (raw & mask) >> lsb;
         }
 
@@ -926,7 +948,7 @@ private:
 
             uint8_t lsb = r.bitfield->lsb;
             uint8_t msb = r.bitfield->msb;
-            uint64_t mask = ((1ULL << (msb - lsb + 1)) - 1) << lsb;
+            uint64_t mask = make_bit_mask(lsb, msb);
             current = (current & ~mask) | ((raw << lsb) & mask);
             raw = current;
         }
@@ -962,9 +984,9 @@ private:
         uint8_t entry_buf[72] = {};
         read_reg(manifest_addr + 8, entry_buf, sizeof(entry_buf));
 
-        uint64_t file_info    = *reinterpret_cast<uint64_t*>(entry_buf + 0x00);
-        uint64_t file_offset  = *reinterpret_cast<uint64_t*>(entry_buf + 0x08);
-        uint64_t file_size_64 = *reinterpret_cast<uint64_t*>(entry_buf + 0x10);
+        uint64_t file_info    = read_le_u64(entry_buf + 0x00);
+        uint64_t file_offset  = read_le_u64(entry_buf + 0x08);
+        uint64_t file_size_64 = read_le_u64(entry_buf + 0x10);
         uint32_t file_size    = static_cast<uint32_t>(file_size_64);
         uint8_t  compression  = (file_info >> 48) & 0xFF;
 
@@ -1122,7 +1144,8 @@ private:
     std::string read_abrm_string(uint64_t offset) {
         ensure_open();
         char buf[ABRM_STRING_LEN] = {};
-        read_mem(fd_, offset, buf, ABRM_STRING_LEN);
+        if (!read_mem(fd_, offset, buf, ABRM_STRING_LEN))
+            throw std::runtime_error("Failed to read ABRM string at 0x" + to_hex(offset));
         return std::string(buf, strnlen(buf, ABRM_STRING_LEN));
     }
 
@@ -1147,6 +1170,34 @@ private:
         char buf[20];
         snprintf(buf, sizeof(buf), "%08lX", static_cast<unsigned long>(val));
         return buf;
+    }
+
+    static uint64_t make_bit_mask(uint8_t lsb, uint8_t msb) {
+        if (msb < lsb)
+            throw std::runtime_error("Invalid bitfield range: msb < lsb");
+
+        uint8_t width = static_cast<uint8_t>(msb - lsb + 1);
+        if (width == 0 || width > 64)
+            throw std::runtime_error("Invalid bitfield width: " + std::to_string(width));
+
+        if (width == 64) {
+            if (lsb != 0)
+                throw std::runtime_error("Invalid 64-bit bitfield offset");
+            return ~0ULL;
+        }
+
+        return ((1ULL << width) - 1ULL) << lsb;
+    }
+
+    static uint64_t read_le_u64(const uint8_t* p) {
+        return static_cast<uint64_t>(p[0])
+             | (static_cast<uint64_t>(p[1]) << 8)
+             | (static_cast<uint64_t>(p[2]) << 16)
+             | (static_cast<uint64_t>(p[3]) << 24)
+             | (static_cast<uint64_t>(p[4]) << 32)
+             | (static_cast<uint64_t>(p[5]) << 40)
+             | (static_cast<uint64_t>(p[6]) << 48)
+             | (static_cast<uint64_t>(p[7]) << 56);
     }
 };
 
