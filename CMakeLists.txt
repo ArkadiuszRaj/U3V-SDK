@@ -4,13 +4,16 @@ project(u3v-sdk LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBZIP REQUIRED IMPORTED_TARGET libzip)
+
 # pugixml (submodule)
 add_subdirectory(import/pugixml EXCLUDE_FROM_ALL)
 
 # Header-only SDK library (depends on pugixml via xml_parser/NodeMap.hpp)
 add_library(u3v_sdk INTERFACE)
 target_include_directories(u3v_sdk INTERFACE include)
-target_link_libraries(u3v_sdk INTERFACE pugixml)
+target_link_libraries(u3v_sdk INTERFACE pugixml PkgConfig::LIBZIP)
 
 # XML parser tools
 add_executable(load_xml include/xml_parser/tools/load_xml.cpp)

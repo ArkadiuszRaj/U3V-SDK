@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -29,6 +30,8 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <linux/types.h>
+
+#include <zip.h>
 
 #include "xml_parser/NodeMap.hpp"
 
@@ -181,7 +184,7 @@ struct Frame {
 
 struct StreamBuffer {
     std::vector<uint8_t> image;
-    uint64_t handle = 0;
+    __u64 handle = 0;
     bool queued = false;
 };
 
@@ -985,73 +988,93 @@ private:
         throw std::runtime_error("Unsupported manifest compression: " + std::to_string(compression));
     }
 
-    // Minimal ZIP extraction: find first file in ZIP archive, decompress if stored
-    // Most GenICam camera ZIPs contain a single stored (uncompressed) XML file
+    // Extract XML content from ZIP payload using libzip.
     static std::string extract_xml_from_zip(const std::vector<uint8_t>& zip_data) {
-        // ZIP local file header signature: 0x04034b50
-        if (zip_data.size() < 30)
-            throw std::runtime_error("ZIP data too small");
+        zip_error_t src_error;
+        zip_error_init(&src_error);
 
-        uint32_t sig = *reinterpret_cast<const uint32_t*>(zip_data.data());
-        if (sig != 0x04034b50)
-            throw std::runtime_error("Invalid ZIP signature");
+        zip_source_t* source = zip_source_buffer_create(
+            zip_data.data(), zip_data.size(), 0, &src_error);
+        if (!source) {
+            std::string msg = zip_error_strerror(&src_error);
+            zip_error_fini(&src_error);
+            throw std::runtime_error("zip_source_buffer_create failed: " + msg);
+        }
+        zip_error_fini(&src_error);
 
-        uint16_t method    = *reinterpret_cast<const uint16_t*>(zip_data.data() + 8);
-        uint32_t comp_size = *reinterpret_cast<const uint32_t*>(zip_data.data() + 18);
-        uint16_t name_len  = *reinterpret_cast<const uint16_t*>(zip_data.data() + 26);
-        uint16_t extra_len = *reinterpret_cast<const uint16_t*>(zip_data.data() + 28);
+        zip_error_t open_error;
+        zip_error_init(&open_error);
+        zip_t* archive = zip_open_from_source(source, ZIP_RDONLY, &open_error);
+        if (!archive) {
+            std::string msg = zip_error_strerror(&open_error);
+            zip_error_fini(&open_error);
+            zip_source_free(source);
+            throw std::runtime_error("zip_open_from_source failed: " + msg);
+        }
+        zip_error_fini(&open_error);
 
-        size_t data_offset = 30 + name_len + extra_len;
-        if (data_offset + comp_size > zip_data.size())
-            throw std::runtime_error("ZIP data truncated");
-
-        if (method == 0) {
-            // Stored (no compression)
-            return std::string(
-                reinterpret_cast<const char*>(zip_data.data() + data_offset), comp_size);
+        const zip_int64_t entry_count = zip_get_num_entries(archive, 0);
+        if (entry_count <= 0) {
+            zip_close(archive);
+            throw std::runtime_error("ZIP archive is empty");
         }
 
-        // For DEFLATE (method=8), fall back to system unzip via temp file
-        if (method == 8) {
-            char tmp_zip[] = "/tmp/u3v_xml_XXXXXX";
-            int tmp_fd = mkstemp(tmp_zip);
-            if (tmp_fd < 0)
-                throw std::runtime_error("Cannot create temp file for ZIP extraction");
+        zip_uint64_t selected_index = static_cast<zip_uint64_t>(-1);
+        for (zip_uint64_t i = 0; i < static_cast<zip_uint64_t>(entry_count); ++i) {
+            const char* name = zip_get_name(archive, i, 0);
+            if (!name)
+                continue;
 
-            ::write(tmp_fd, zip_data.data(), zip_data.size());
-            ::close(tmp_fd);
+            std::string file_name(name);
+            if (!file_name.empty() && file_name.back() == '/')
+                continue;
 
-            std::string tmp_dir = std::string(tmp_zip) + "_dir";
-            std::filesystem::create_directories(tmp_dir);
-
-            std::string cmd = "unzip -o -q " + std::string(tmp_zip) + " -d " + tmp_dir + " 2>/dev/null";
-            int ret = system(cmd.c_str());
-            ::unlink(tmp_zip);
-
-            if (ret != 0) {
-                std::filesystem::remove_all(tmp_dir);
-                throw std::runtime_error("unzip failed (is unzip installed?)");
+            std::string ext = std::filesystem::path(file_name).extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (ext == ".xml") {
+                selected_index = i;
+                break;
             }
 
-            // Find first .xml file in extracted directory
-            std::string xml_content;
-            for (const auto& entry : std::filesystem::directory_iterator(tmp_dir)) {
-                if (entry.path().extension() == ".xml" || entry.path().extension() == ".XML") {
-                    std::ifstream f(entry.path());
-                    std::ostringstream ss;
-                    ss << f.rdbuf();
-                    xml_content = ss.str();
-                    break;
-                }
-            }
-            std::filesystem::remove_all(tmp_dir);
-
-            if (xml_content.empty())
-                throw std::runtime_error("No XML file found in camera ZIP archive");
-            return xml_content;
+            if (selected_index == static_cast<zip_uint64_t>(-1))
+                selected_index = i;
         }
 
-        throw std::runtime_error("Unsupported ZIP compression method: " + std::to_string(method));
+        if (selected_index == static_cast<zip_uint64_t>(-1)) {
+            zip_close(archive);
+            throw std::runtime_error("No file entries found in ZIP archive");
+        }
+
+        zip_file_t* file = zip_fopen_index(archive, selected_index, 0);
+        if (!file) {
+            std::string msg = zip_strerror(archive);
+            zip_close(archive);
+            throw std::runtime_error("zip_fopen_index failed: " + msg);
+        }
+
+        std::string xml_content;
+        std::vector<char> buffer(8192);
+        while (true) {
+            zip_int64_t n = zip_fread(file, buffer.data(), buffer.size());
+            if (n < 0) {
+                std::string msg = zip_file_strerror(file);
+                zip_fclose(file);
+                zip_close(archive);
+                throw std::runtime_error("zip_fread failed: " + msg);
+            }
+            if (n == 0)
+                break;
+            xml_content.append(buffer.data(), static_cast<size_t>(n));
+        }
+
+        zip_fclose(file);
+        zip_close(archive);
+
+        if (xml_content.empty())
+            throw std::runtime_error("XML entry in ZIP archive is empty");
+
+        return xml_content;
     }
 
     // Low-level memory read via ioctl (chunked for GenCP)

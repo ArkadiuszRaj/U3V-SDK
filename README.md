@@ -39,7 +39,18 @@ C++ SDK for USB3 Vision cameras on Linux. Provides a simple API for camera disco
 - Linux with the `usb3vision` kernel module loaded
 - C++20 compiler (GCC 12+ or Clang 15+)
 - CMake 3.20+
+- `pkg-config`
+- `libzip` development headers (`libzip-dev` on Debian/Ubuntu)
 - A USB3 Vision compliant camera
+
+### System dependencies (Ubuntu/Debian)
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake pkg-config libzip-dev
+```
+
+`pugixml` is included as a git submodule (`import/pugixml`) and is built automatically by CMake.
 
 ### Kernel driver setup
 
@@ -458,6 +469,8 @@ int main() {
 ## Tools
 
 Standalone utilities in `include/xml_parser/tools/`:
+
+Note: `dump_device_xml` uses the `unzip` executable when the camera XML payload is ZIP-compressed.
 
 | Tool | Description |
 |---|---|
